@@ -9,7 +9,7 @@
 
 
 export GOOS=linux
-export GOARCH=${1:-arm64}
+export GOARCH=${1:-arm}
 export GO111MODULE="off"
 export GOARM=${2:-7}
 echo GOARCH=$GOARCH, GOARM=$GOARM

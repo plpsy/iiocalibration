@@ -114,7 +114,7 @@ func Calibration(w http.ResponseWriter, r *http.Request, params httprouter.Param
 
 func calibrationAll() error {
 	var args []string
-	args = append(args, "-s", caliSamples, "cf_axi_adc", "voltage0")
+	args = append(args, "-s", caliSamples, "cf_axi_adc")
 	for i := 0; i <= 6; i++ {
 		args = append(args, fmt.Sprintf("voltage%d", i))
 	}
