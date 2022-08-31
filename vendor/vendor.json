@@ -1,0 +1,62 @@
+{
+	"comment": "",
+	"ignore": "test",
+	"package": [
+		{
+			"checksumSHA1": "ZL6Akr3aF6dDFq+VRTkQmtAon54=",
+			"path": "github.com/Sirupsen/logrus",
+			"revision": ""
+		},
+		{
+			"checksumSHA1": "CEQyp/uSiLjeMfhiW+kWVDfaLJk=",
+			"path": "github.com/codegangsta/cli",
+			"revision": "7e49cc210a231eec218c2fba82df106af06d05b5",
+			"revisionTime": "2019-08-10T09:01:16Z"
+		},
+		{
+			"checksumSHA1": "ISix6N0zy0sX6GzHrkbPrY9hT74=",
+			"path": "github.com/cpuguy83/go-md2man/md2man",
+			"revision": "f79a8a8ca69da163eee19ab442bedad7a35bba5a",
+			"revisionTime": "2019-03-14T23:30:15Z"
+		},
+		{
+			"checksumSHA1": "U1yzIO34W0A7w8uuWiotoun1oDQ=",
+			"path": "github.com/julienschmidt/httprouter",
+			"revision": "8c9f31f047a304abedb5614d4a18a843cd5f4a40",
+			"revisionTime": "2020-01-14T09:48:04Z"
+		},
+		{
+			"checksumSHA1": "jTltGSBWsUUeKxN85xqcBtutNDg=",
+			"path": "github.com/pkg/xattr",
+			"revision": "c4f4a3783e831e10617e3c123a4304172eeb055b",
+			"revisionTime": "2020-02-04T12:18:49Z"
+		},
+		{
+			"checksumSHA1": "pvaXTqyoqnwZrF3lAEkfZvBxFtQ=",
+			"origin": "github.com/cpuguy83/go-md2man/vendor/github.com/russross/blackfriday/v2",
+			"path": "github.com/russross/blackfriday/v2",
+			"revision": "f79a8a8ca69da163eee19ab442bedad7a35bba5a",
+			"revisionTime": "2019-03-14T23:30:15Z"
+		},
+		{
+			"checksumSHA1": "IGPrksV2kzWSKV1wgQq7ze+pCE0=",
+			"origin": "github.com/cpuguy83/go-md2man/vendor/github.com/shurcooL/sanitized_anchor_name",
+			"path": "github.com/shurcooL/sanitized_anchor_name",
+			"revision": "f79a8a8ca69da163eee19ab442bedad7a35bba5a",
+			"revisionTime": "2019-03-14T23:30:15Z"
+		},
+		{
+			"checksumSHA1": "ef7fqXCjAavRO2aCl7FOKEqoqrg=",
+			"path": "github.com/urfave/cli",
+			"revision": "693af58b4d51b8fcc7f9d89576da170765980581",
+			"revisionTime": "2019-02-03T18:40:40Z"
+		},
+		{
+			"checksumSHA1": "syjL4XkD2RVPfuYnxoRggCmpY/k=",
+			"path": "golang.org/x/sys/unix",
+			"revision": "15dcb6c0061f497a3f66e3ea034b629c6dd4d99e",
+			"revisionTime": "2019-06-15T12:11:14Z"
+		}
+	],
+	"rootPath": "github.com/hanwoody/rtfrep"
+}
