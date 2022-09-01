@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -20,13 +19,18 @@ const (
 	caliSamples = "1024"
 )
 
-type CaliParams struct {
-	ChanOff [15]int `json:"ChanOff"`
-}
-
 func CalibrationParams(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
-	caliparams := CaliParams{}
-
+	var caliparams map[string]map[int]int
+	fp, err := os.Open(cfgFilePath)
+	if err != nil {
+		writeResponse(w, caliparams)
+		return
+	}
+	defer fp.Close()
+	err = json.NewDecoder(fp).Decode(&caliparams)
+	if err != nil {
+		writeResponse(w, "read caliparams config file error")
+	}
 	writeResponse(w, caliparams)
 }
 
@@ -44,48 +48,6 @@ func writeErrorResponse(w http.ResponseWriter, errorCode int, errorMsg string) {
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(errorCode)
 	json.NewEncoder(w).Encode(errorMsg)
-}
-
-func WeightLoad(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
-
-	r.ParseMultipartForm(32 << 20)
-	// 根据字段名获取表单文件
-	formFile, _, err := r.FormFile("weight")
-	if err != nil {
-		logrus.Errorf("WeightLoad get form file failed: %s", err.Error())
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	defer formFile.Close()
-
-	// 创建保存文件
-	path := "/tmp/weight.bin"
-
-	os.Remove(path)
-
-	destFile, err := os.Create(path)
-	if err != nil {
-		logrus.Errorf("WeightLoad crate file failed: %s", err.Error())
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	defer destFile.Close()
-
-	if _, err = formFile.Seek(0, io.SeekStart); err != nil {
-		logrus.Errorf("WeightLoad seek failed: %s", err.Error())
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	// 读取表单文件，写入保存文件
-	_, err = io.Copy(destFile, formFile)
-	if err != nil {
-		logrus.Errorf("WeightLoad copy file failed: %s", err.Error())
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	weightLoadWrapper(w, r, params)
 }
 
 func Calibration(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
@@ -113,10 +75,15 @@ func Calibration(w http.ResponseWriter, r *http.Request, params httprouter.Param
 }
 
 func calibrationAll() error {
+	err := calibration("cf_axi_adc", []int{0, 1, 2, 3, 4, 5, 6})
+	return err
+}
+
+func calibration(devName string, chanIds []int) error {
 	var args []string
-	args = append(args, "-s", caliSamples, "cf_axi_adc")
-	for i := 0; i <= 6; i++ {
-		args = append(args, fmt.Sprintf("voltage%d", i))
+	args = append(args, "-s", caliSamples, devName)
+	for _, id := range chanIds {
+		args = append(args, fmt.Sprintf("voltage%d", id))
 	}
 	logrus.Info(args)
 
@@ -129,18 +96,80 @@ func calibrationAll() error {
 	cmd.Stdout = samplePoints
 
 	if err := cmd.Start(); err != nil {
-		logrus.Errorf("calibrationAll cmd.Start() failed: %s", err.Error())
-		return err
+		err1 := fmt.Errorf("calibrationAll cmd.Start() failed: %s", err.Error())
+		logrus.Errorf(err1.Error())
+		return err1
 	}
 	logrus.Info("iio_readdev started")
 	if err := cmd.Wait(); err != nil {
-		logrus.Errorf("calibrationAll cmd.Wait() failed: %s", err.Error())
-		return err
+		err1 := fmt.Errorf("calibration cmd.Wait() failed: %s", err.Error())
+		logrus.Errorf(err1.Error())
+		return err1
 	}
 	logrus.Info("iio_readdev wait done")
 
-	logrus.Info(len(samplePoints.Bytes()))
+	var averages []int
+	if err := calcAverage(samplePoints.Bytes(), chanIds, averages); err != nil {
+		err1 := fmt.Errorf("calibration calcAverage failed: %s", err.Error())
+		logrus.Errorf(err1.Error())
+		return err1
+	}
+	if len(averages) != len(chanIds) {
+		err1 := fmt.Errorf("calibration calcAverage, len(averages)[%+v] != len(chanIds)[%+v]", averages, chanIds)
+		logrus.Errorf(err1.Error())
+		return err1
+	}
+
+	for i, id := range chanIds {
+		err := setDevOffset(devName, id, averages[i])
+		if err != nil {
+			err1 := fmt.Errorf("calibration setDevOffset(%s) chanid(%d) failed: %s", devName, id, err.Error())
+			logrus.Errorf(err1.Error())
+			return err1
+		}
+	}
 	return nil
+}
+
+func saveAverage(devName string, chanId int, offset int) error {
+	var params map[string]map[int]int
+	var devParams map[int]int
+	fp, err := os.OpenFile(cfgFilePath, os.O_CREATE, 0600)
+	if err != nil {
+		return err
+	}
+	defer fp.Close()
+	err = json.NewDecoder(fp).Decode(&params)
+	if err != nil {
+		return fmt.Errorf("read json config err=%v", err)
+	}
+	devParams, ok := params[devName]
+	if ok {
+		devParams[chanId] = offset
+	} else {
+		devParams := make(map[int]int)
+		devParams[chanId] = offset
+		params[devName] = devParams
+	}
+
+	err = json.NewEncoder(fp).Encode(params)
+	if err != nil {
+		return fmt.Errorf("write json config err=%v", err)
+	}
+	return nil
+}
+
+func calcAverage(points []byte, chanIds []int, averages []int) error {
+
+	for _, id := range chanIds {
+		averages = append(averages, id)
+	}
+	return nil
+}
+
+func setDevOffset(devName string, chanId int, offset int) error {
+	err := saveAverage(devName, chanId, offset)
+	return err
 }
 
 func calibrationOne(chanId int) error {
