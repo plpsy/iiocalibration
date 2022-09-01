@@ -58,6 +58,8 @@ func main() {
 		app.Version += "-" + gitCommit
 	}
 
+	api.LoadAndSetOffset()
+
 	app.Author = "panling"
 	app.Email = "panling@aiclab.org"
 	app.Flags = globalFlags

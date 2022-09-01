@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,7 +17,7 @@ import (
 
 const (
 	cfgFilePath = "/media/sd-mmcblk1p2/calibration.json"
-	caliSamples = "1024"
+	caliSamples = 1024
 )
 
 func CalibrationParams(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
@@ -76,12 +77,39 @@ func Calibration(w http.ResponseWriter, r *http.Request, params httprouter.Param
 
 func calibrationAll() error {
 	err := calibration("cf_axi_adc", []int{0, 1, 2, 3, 4, 5, 6})
+	if err != nil {
+		return err
+	}
+	err = calibration("cf_axi_adc_1", []int{0, 1, 2, 3, 4, 5, 6, 7})
 	return err
+}
+
+func LoadAndSetOffset() {
+	var caliparams map[string]map[int]int
+	fp, err := os.Open(cfgFilePath)
+	if err != nil {
+		logrus.Error("loadAndSetOffset open config error", err)
+		return
+	}
+	defer fp.Close()
+	err = json.NewDecoder(fp).Decode(&caliparams)
+	if err != nil {
+		logrus.Error("loadAndSetOffset decode config error", err)
+	}
+	for devName, devParams := range caliparams {
+		for chanId, offset := range devParams {
+			err := setDevOffset(devName, chanId, offset)
+			if err != nil {
+				logrus.Error("loadAndSetOffset setDevOffset error", err)
+			}
+		}
+	}
+	logrus.Info("LoadAndSetOffset done")
 }
 
 func calibration(devName string, chanIds []int) error {
 	var args []string
-	args = append(args, "-s", caliSamples, devName)
+	args = append(args, "-s", fmt.Sprintf("%d", caliSamples), devName)
 	for _, id := range chanIds {
 		args = append(args, fmt.Sprintf("voltage%d", id))
 	}
@@ -108,8 +136,8 @@ func calibration(devName string, chanIds []int) error {
 	}
 	logrus.Info("iio_readdev wait done")
 
-	var averages []int
-	if err := calcAverage(samplePoints.Bytes(), chanIds, averages); err != nil {
+	averages, err := calcAverage(samplePoints.Bytes(), chanIds)
+	if err != nil {
 		err1 := fmt.Errorf("calibration calcAverage failed: %s", err.Error())
 		logrus.Errorf(err1.Error())
 		return err1
@@ -127,6 +155,12 @@ func calibration(devName string, chanIds []int) error {
 			logrus.Errorf(err1.Error())
 			return err1
 		}
+		err = saveAverage(devName, id, averages[i])
+		if err != nil {
+			err1 := fmt.Errorf("calibration saveAverage(%s) chanid(%d) failed: %s", devName, id, err.Error())
+			logrus.Errorf(err1.Error())
+			return err1
+		}
 	}
 	return nil
 }
@@ -134,14 +168,25 @@ func calibration(devName string, chanIds []int) error {
 func saveAverage(devName string, chanId int, offset int) error {
 	var params map[string]map[int]int
 	var devParams map[int]int
-	fp, err := os.OpenFile(cfgFilePath, os.O_CREATE, 0600)
+
+	// 先读出已有配置,再创建新文件
+	fp, err := os.Open(cfgFilePath)
+	if err == nil {
+		err = json.NewDecoder(fp).Decode(&params)
+		if err != nil {
+			params = nil
+		}
+		fp.Close()
+	}
+
+	fp, err = os.Create(cfgFilePath)
 	if err != nil {
 		return err
 	}
+
 	defer fp.Close()
-	err = json.NewDecoder(fp).Decode(&params)
-	if err != nil {
-		return fmt.Errorf("read json config err=%v", err)
+	if params == nil {
+		params = make(map[string]map[int]int)
 	}
 	devParams, ok := params[devName]
 	if ok {
@@ -159,21 +204,79 @@ func saveAverage(devName string, chanId int, offset int) error {
 	return nil
 }
 
-func calcAverage(points []byte, chanIds []int, averages []int) error {
+func calcAverage(points []byte, chanIds []int) (averages []int, err error) {
+	samples := make([]int32, caliSamples)
+	for _, chanId := range chanIds {
+		for i := 0; i < caliSamples; i++ {
+			// 找到采样点偏移
+			off := i*len(chanIds)*4 + chanId*4
+			bytebuff := bytes.NewBuffer(points[off : off+4])
+			binary.Read(bytebuff, binary.LittleEndian, &samples[i])
+			// 24位补码表示的有符号采样值,转换为32位有符号整数
+			samples[i] <<= 8
+			samples[i] >>= 8
+		}
 
-	for _, id := range chanIds {
-		averages = append(averages, id)
 	}
+	return averages, nil
+}
+
+func writeDevReg(devName string, off int, val uint8) error {
+	var args []string
+
+	args = append(args, devName, fmt.Sprintf("0x%02x", off), fmt.Sprintf("%d", val))
+	logrus.Info("writeDevReg args:", args)
+
+	cmd := exec.Command("iio_reg", args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Pdeathsig: syscall.SIGKILL,
+	}
+
+	if err := cmd.Start(); err != nil {
+		err1 := fmt.Errorf("writeDevReg cmd.Start() failed: %s", err.Error())
+		logrus.Errorf(err1.Error())
+		return err1
+	}
+
+	if err := cmd.Wait(); err != nil {
+		err1 := fmt.Errorf("writeDevReg cmd.Wait() failed: %s", err.Error())
+		logrus.Errorf(err1.Error())
+		return err1
+	}
+	logrus.Info("writeDevReg wait done")
 	return nil
 }
 
 func setDevOffset(devName string, chanId int, offset int) error {
-	err := saveAverage(devName, chanId, offset)
-	return err
+	var msb, mib, lsb uint8
+
+	msb = (uint8)(offset >> 16)
+	if offset < 0 {
+		msb |= 0x80
+	}
+	mib = (uint8)(offset >> 8)
+	lsb = (uint8)(offset)
+
+	logrus.Infof("setDevOffset chanId=%d, offset=%d, msb/mib/lsb=(%2x/%2x/%2x)", chanId, offset, msb, mib, lsb)
+	off := 0x1E + chanId*3
+	err := writeDevReg(devName, off, msb)
+	if err != nil {
+		return err
+	}
+	off += 1
+	err = writeDevReg(devName, off, mib)
+	if err != nil {
+		return err
+	}
+	off += 1
+	err = writeDevReg(devName, off, lsb)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func calibrationOne(chanId int) error {
-	var args []string
 	if chanId < 0 || chanId > 14 {
 		return fmt.Errorf("chanid=%d error", chanId)
 	}
@@ -184,10 +287,9 @@ func calibrationOne(chanId int) error {
 		chanId -= 7
 		devName = "cf_axi_adc_1"
 	}
-	args = append(args, "-s", caliSamples, devName, fmt.Sprintf("voltage%d", chanId))
-
-	logrus.Info(devName, args)
-	return nil
+	logrus.Info("calibrationOne:", devName, chanId)
+	err := calibration(devName, []int{chanId})
+	return err
 }
 
 func prettyJson(w http.ResponseWriter, data interface{}) {
@@ -195,70 +297,4 @@ func prettyJson(w http.ResponseWriter, data interface{}) {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	enc.Encode(data)
-}
-
-func inferWrapper(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
-	var args []string
-
-	ch := params.ByName("channel")
-
-	id, err := strconv.Atoi(ch)
-	logrus.Errorf("channel = %v, id = %d", ch, id)
-	if err != nil {
-		logrus.Errorf("channel = %v not allowed", err.Error())
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	args = append(args, "-i", ch, "-f", "/tmp/infer.png")
-	logrus.Errorf("args = %v", args)
-	cmd := exec.Command("/root/yolo3", args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Pdeathsig: syscall.SIGKILL,
-	}
-
-	jsonResult := new(bytes.Buffer)
-	cmd.Stdout = jsonResult
-
-	if err := cmd.Start(); err != nil {
-		logrus.Errorf("inferWrapper cmd.Start() failed: %s", err.Error())
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	logrus.Errorf("start done")
-	err = cmd.Wait()
-	if err != nil {
-		logrus.Errorf("inferWrapper cmd.Wait() failed: %s", err.Error())
-		w.WriteHeader(http.StatusInternalServerError)
-	}
-	logrus.Errorf("wait done")
-	var v interface{}
-	json.NewDecoder(jsonResult).Decode(&v)
-	prettyJson(w, v)
-
-}
-
-func weightLoadWrapper(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
-	var args []string
-
-	args = append(args, params.ByName("channel"))
-
-	cmd := exec.Command("./weightLoad/weightLoad", args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Pdeathsig: syscall.SIGKILL,
-	}
-
-	if err := cmd.Start(); err != nil {
-		logrus.Errorf("weightLoadWrapper cmd.Start() failed: %s", err.Error())
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	err := cmd.Wait()
-	if err != nil {
-		logrus.Errorf("weightLoadWrapper cmd.Wait() failed: %s", err.Error())
-		w.WriteHeader(http.StatusInternalServerError)
-	}
-	w.WriteHeader(http.StatusOK)
-
 }
