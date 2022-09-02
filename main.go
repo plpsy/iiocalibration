@@ -92,6 +92,8 @@ func actionServer(ctx *cli.Context) {
 func RegisterHandler() *httprouter.Router {
 	router := httprouter.New()
 	router.GET("/params", api.CalibrationParams)
+	router.GET("/regparams", api.GetRegsParams)
+	router.DELETE("/regparams", api.ClearRegsParams)
 	router.POST("/calibration", api.Calibration)
 	return router
 }

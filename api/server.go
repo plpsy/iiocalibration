@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/julienschmidt/httprouter"
@@ -21,7 +22,7 @@ const (
 )
 
 func CalibrationParams(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
-	var caliparams map[string]map[int]int
+	var caliparams map[string]map[int]int32
 	fp, err := os.Open(cfgFilePath)
 	if err != nil {
 		writeResponse(w, caliparams)
@@ -33,6 +34,24 @@ func CalibrationParams(w http.ResponseWriter, r *http.Request, params httprouter
 		writeResponse(w, "read caliparams config file error")
 	}
 	writeResponse(w, caliparams)
+}
+
+func GetRegsParams(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
+	caliParams, err := getOffsetRegs()
+	if err != nil {
+		writeResponse(w, err.Error())
+		return
+	}
+	writeResponse(w, caliParams)
+}
+
+func ClearRegsParams(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
+	err := clearOffsetRegs()
+	if err != nil {
+		writeResponse(w, err.Error())
+		return
+	}
+	writeResponse(w, "ClearRegsParams done")
 }
 
 // Writes the response as a standard JSON response with StatusOK
@@ -85,7 +104,7 @@ func calibrationAll() error {
 }
 
 func LoadAndSetOffset() {
-	var caliparams map[string]map[int]int
+	var caliparams map[string]map[int]int32
 	fp, err := os.Open(cfgFilePath)
 	if err != nil {
 		logrus.Error("loadAndSetOffset open config error", err)
@@ -95,16 +114,68 @@ func LoadAndSetOffset() {
 	err = json.NewDecoder(fp).Decode(&caliparams)
 	if err != nil {
 		logrus.Error("loadAndSetOffset decode config error", err)
+		return
 	}
-	for devName, devParams := range caliparams {
+
+	err = setOffsetRegs(caliparams)
+	if err != nil {
+		logrus.Error("LoadAndSetOffset setOffsetRegs error", err)
+	}
+	logrus.Info("LoadAndSetOffset done")
+}
+
+func setOffsetRegs(params map[string]map[int]int32) error {
+	for devName, devParams := range params {
 		for chanId, offset := range devParams {
 			err := setDevOffset(devName, chanId, offset)
 			if err != nil {
-				logrus.Error("loadAndSetOffset setDevOffset error", err)
+				logrus.Error("setOffsetRegs setDevOffset error", err)
+				return err
 			}
 		}
 	}
-	logrus.Info("LoadAndSetOffset done")
+	return nil
+}
+
+func clearOffsetRegs() error {
+	params := make(map[string]map[int]int32)
+	devName := "cf_axi_adc"
+	params[devName] = make(map[int]int32)
+	for i := 0; i < 7; i++ {
+		params[devName][i] = 0
+	}
+	devName = "cf_axi_adc_1"
+	params[devName] = make(map[int]int32)
+	for i := 0; i < 8; i++ {
+		params[devName][i] = 0
+	}
+	return setOffsetRegs(params)
+}
+
+func getOffsetRegs() (map[string]map[int]int32, error) {
+	params := make(map[string]map[int]int32)
+	devName := "cf_axi_adc"
+	params[devName] = make(map[int]int32)
+	for i := 0; i < 7; i++ {
+		offset, err := getDevOffset(devName, i)
+		if err != nil {
+			logrus.Errorf("getOffsetRegs %s chanid=%d err", devName, i, err)
+			return nil, err
+		}
+		params[devName][i] = offset
+	}
+
+	devName = "cf_axi_adc_1"
+	params[devName] = make(map[int]int32)
+	for i := 0; i < 8; i++ {
+		offset, err := getDevOffset(devName, i)
+		if err != nil {
+			logrus.Errorf("getOffsetRegs %s chanid=%d err", devName, i, err)
+			return nil, err
+		}
+		params[devName][i] = offset
+	}
+	return params, nil
 }
 
 func calibration(devName string, chanIds []int) error {
@@ -136,12 +207,7 @@ func calibration(devName string, chanIds []int) error {
 	}
 	logrus.Info("iio_readdev wait done")
 
-	averages, err := calcAverage(samplePoints.Bytes(), chanIds)
-	if err != nil {
-		err1 := fmt.Errorf("calibration calcAverage failed: %s", err.Error())
-		logrus.Errorf(err1.Error())
-		return err1
-	}
+	averages := calcAverage(samplePoints.Bytes(), len(chanIds))
 	if len(averages) != len(chanIds) {
 		err1 := fmt.Errorf("calibration calcAverage, len(averages)[%+v] != len(chanIds)[%+v]", averages, chanIds)
 		logrus.Errorf(err1.Error())
@@ -165,9 +231,9 @@ func calibration(devName string, chanIds []int) error {
 	return nil
 }
 
-func saveAverage(devName string, chanId int, offset int) error {
-	var params map[string]map[int]int
-	var devParams map[int]int
+func saveAverage(devName string, chanId int, offset int32) error {
+	var params map[string]map[int]int32
+	var devParams map[int]int32
 
 	// 先读出已有配置,再创建新文件
 	fp, err := os.Open(cfgFilePath)
@@ -186,13 +252,13 @@ func saveAverage(devName string, chanId int, offset int) error {
 
 	defer fp.Close()
 	if params == nil {
-		params = make(map[string]map[int]int)
+		params = make(map[string]map[int]int32)
 	}
 	devParams, ok := params[devName]
 	if ok {
 		devParams[chanId] = offset
 	} else {
-		devParams := make(map[int]int)
+		devParams := make(map[int]int32)
 		devParams[chanId] = offset
 		params[devName] = devParams
 	}
@@ -204,21 +270,91 @@ func saveAverage(devName string, chanId int, offset int) error {
 	return nil
 }
 
-func calcAverage(points []byte, chanIds []int) (averages []int, err error) {
+func calcAverage(points []byte, chanNum int) []int32 {
 	samples := make([]int32, caliSamples)
-	for _, chanId := range chanIds {
+	averages := make([]int32, chanNum)
+
+	for idx := 0; idx < chanNum; idx++ {
 		for i := 0; i < caliSamples; i++ {
 			// 找到采样点偏移
-			off := i*len(chanIds)*4 + chanId*4
+			off := i*chanNum*4 + idx*4
 			bytebuff := bytes.NewBuffer(points[off : off+4])
 			binary.Read(bytebuff, binary.LittleEndian, &samples[i])
 			// 24位补码表示的有符号采样值,转换为32位有符号整数
 			samples[i] <<= 8
 			samples[i] >>= 8
 		}
-
+		logrus.Info(samples[0:64])
+		var sum int64 = 0
+		for i := 0; i < caliSamples; i++ {
+			sum += (int64)(samples[i])
+		}
+		averages[idx] = (int32)(sum / (int64)(caliSamples))
+		averages[idx] = (int32)((float32)(averages[idx]) * 0.75)
+		averages[idx] = 0 - averages[idx]
 	}
-	return averages, nil
+
+	return averages
+}
+
+func getDevOffset(devName string, chanId int) (offset int32, err error) {
+	var msb, mib, lsb uint8
+
+	off := 0x1E + chanId*3
+	msb, err = readDevReg(devName, off)
+	if err != nil {
+		return
+	}
+	off += 1
+	mib, err = readDevReg(devName, off)
+	if err != nil {
+		return
+	}
+	off += 1
+	lsb, err = readDevReg(devName, off)
+	if err != nil {
+		return
+	}
+	offset = ((int32)(msb) << 16) | ((int32)(mib) << 8) | (int32)(lsb)
+	offset <<= 8
+	offset >>= 8
+
+	return
+}
+
+func readDevReg(devName string, off int) (val uint8, err error) {
+	var args []string
+
+	args = append(args, devName, fmt.Sprintf("0x%02x", off))
+	logrus.Info("readDevReg args:", args)
+
+	cmd := exec.Command("iio_reg", args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Pdeathsig: syscall.SIGKILL,
+	}
+	valBuff := new(bytes.Buffer)
+	cmd.Stdout = valBuff
+
+	if err = cmd.Start(); err != nil {
+		err = fmt.Errorf("readDevReg cmd.Start() failed: %s", err.Error())
+		logrus.Errorf(err.Error())
+		return
+	}
+
+	if err = cmd.Wait(); err != nil {
+		err = fmt.Errorf("writeDevReg cmd.Wait() failed: %s", err.Error())
+		logrus.Errorf(err.Error())
+		return
+	}
+	varStr := strings.Replace(string(valBuff.Bytes()), "\n", "", -1)
+	val64, err := strconv.ParseInt(varStr, 0, 64)
+	if err != nil {
+		err = fmt.Errorf("readDevReg strconv.ParseInt failed: %s", err.Error())
+		logrus.Errorf(err.Error())
+		return
+	}
+	val = (uint8)(val64)
+	return
 }
 
 func writeDevReg(devName string, off int, val uint8) error {
@@ -247,7 +383,7 @@ func writeDevReg(devName string, off int, val uint8) error {
 	return nil
 }
 
-func setDevOffset(devName string, chanId int, offset int) error {
+func setDevOffset(devName string, chanId int, offset int32) error {
 	var msb, mib, lsb uint8
 
 	msb = (uint8)(offset >> 16)
@@ -257,7 +393,7 @@ func setDevOffset(devName string, chanId int, offset int) error {
 	mib = (uint8)(offset >> 8)
 	lsb = (uint8)(offset)
 
-	logrus.Infof("setDevOffset chanId=%d, offset=%d, msb/mib/lsb=(%2x/%2x/%2x)", chanId, offset, msb, mib, lsb)
+	logrus.Infof("setDevOffset chanId=%d, offset=%d, msb/mib/lsb=(%02x/%02x/%02x)", chanId, offset, msb, mib, lsb)
 	off := 0x1E + chanId*3
 	err := writeDevReg(devName, off, msb)
 	if err != nil {
