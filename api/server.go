@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/julienschmidt/httprouter"
 	"github.com/sirupsen/logrus"
@@ -21,7 +22,7 @@ const (
 	caliSamples = 1024
 )
 
-var chanId2OffReg []int = []int{0x33, 0x30, 0x20, 0x2A, 0x1E, 0x24, 0x21, 0x27}
+var chanId2OffReg []int = []int{0x33, 0x30, 0x2D, 0x2A, 0x1E, 0x24, 0x21, 0x27}
 
 func CalibrationParams(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
 	var caliparams map[string]map[int]int32
@@ -97,7 +98,17 @@ func Calibration(w http.ResponseWriter, r *http.Request, params httprouter.Param
 }
 
 func calibrationAll() error {
-	err := calibration("cf_axi_adc", []int{0, 1, 2, 3, 4, 5, 6})
+	// 校准前先清零
+	err := clearOffsetRegs()
+	if err != nil {
+		logrus.Error("calibrationAll call clearOffsetRegs error", err)
+		return err
+	}
+	// 等待新鲜的数据进来
+	logrus.Info("wait new data comming")
+	time.Sleep(5 * time.Second)
+
+	err = calibration("cf_axi_adc", []int{0, 1, 2, 3, 4, 5, 6})
 	if err != nil {
 		return err
 	}
@@ -151,6 +162,15 @@ func clearOffsetRegs() error {
 	for i := 0; i < 8; i++ {
 		params[devName][i] = 0
 	}
+	return setOffsetRegs(params)
+}
+
+func clearOffsetReg(devName string, chanId int) error {
+	params := make(map[string]map[int]int32)
+
+	params[devName] = make(map[int]int32)
+	params[devName][chanId] = 0
+
 	return setOffsetRegs(params)
 }
 
@@ -429,7 +449,16 @@ func calibrationOne(chanId int) error {
 		devName = "cf_axi_adc_1"
 	}
 	logrus.Info("calibrationOne:", devName, chanId)
-	err := calibration(devName, []int{chanId})
+	// 校准前先清零
+	err := clearOffsetReg(devName, chanId)
+	if err != nil {
+		logrus.Error("calibrationOne call clearOffsetReg error", err)
+		return err
+	}
+	// 等待新鲜的数据进来
+	logrus.Info("wait new data comming...")
+	time.Sleep(5 * time.Second)
+	err = calibration(devName, []int{chanId})
 	return err
 }
 
