@@ -21,6 +21,8 @@ const (
 	caliSamples = 1024
 )
 
+var chanId2OffReg []int = []int{0x33, 0x30, 0x20, 0x2A, 0x1E, 0x24, 0x21, 0x27}
+
 func CalibrationParams(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
 	var caliparams map[string]map[int]int32
 	fp, err := os.Open(cfgFilePath)
@@ -291,7 +293,7 @@ func calcAverage(points []byte, chanNum int) []int32 {
 		}
 		averages[idx] = (int32)(sum / (int64)(caliSamples))
 		averages[idx] = (int32)((float32)(averages[idx]) * 0.75)
-		averages[idx] = 0 - averages[idx]
+		//		averages[idx] = 0 - averages[idx]
 	}
 
 	return averages
@@ -300,7 +302,9 @@ func calcAverage(points []byte, chanNum int) []int32 {
 func getDevOffset(devName string, chanId int) (offset int32, err error) {
 	var msb, mib, lsb uint8
 
-	off := 0x1E + chanId*3
+	chanId &= 0x7
+	off := chanId2OffReg[chanId]
+
 	msb, err = readDevReg(devName, off)
 	if err != nil {
 		return
@@ -394,7 +398,8 @@ func setDevOffset(devName string, chanId int, offset int32) error {
 	lsb = (uint8)(offset)
 
 	logrus.Infof("setDevOffset chanId=%d, offset=%d, msb/mib/lsb=(%02x/%02x/%02x)", chanId, offset, msb, mib, lsb)
-	off := 0x1E + chanId*3
+	chanId &= 7
+	off := chanId2OffReg[chanId]
 	err := writeDevReg(devName, off, msb)
 	if err != nil {
 		return err
