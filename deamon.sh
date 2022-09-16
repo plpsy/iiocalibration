@@ -4,7 +4,9 @@ while true
 do
     echo "start daemon"
     # start iiocalibration
-    iiocalibration server > /opt/iiocalibration.log 2>&1 &
+    curDir=$(cd $(dirname $0);pwd)
+    echo $curDir
+    $curDir/iiocalibration server > $curDir/iiocalibration.log 2>&1 &
     caliPid=$!
     echo "iiocalibration pid = $caliPid"
 
