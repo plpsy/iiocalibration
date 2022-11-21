@@ -381,6 +381,21 @@ func readDevReg(devName string, off int) (val uint8, err error) {
 	return
 }
 
+func syncDev(devName string) error {
+	time.Sleep(20 * time.Millisecond)
+	if err := writeDevReg(devName, 0x06, 0); err != nil {
+		logrus.Error("syncDev write 0 error:", err)
+		return err
+	}
+	time.Sleep(20 * time.Millisecond)
+	if err := writeDevReg(devName, 0x06, 0x80); err != nil {
+		logrus.Error("syncDev write 1 error:", err)
+		return err
+	}
+	time.Sleep(20 * time.Millisecond)
+	return nil
+}
+
 func writeDevReg(devName string, off int, val uint8) error {
 	var args []string
 
@@ -424,17 +439,28 @@ func setDevOffset(devName string, chanId int, offset int32) error {
 	if err != nil {
 		return err
 	}
+	err = syncDev(devName)
+	if err != nil {
+		return nil
+	}
+
 	off += 1
 	err = writeDevReg(devName, off, mib)
 	if err != nil {
 		return err
 	}
+	err = syncDev(devName)
+	if err != nil {
+		return nil
+	}
+
 	off += 1
 	err = writeDevReg(devName, off, lsb)
 	if err != nil {
 		return err
 	}
-	return nil
+
+	return syncDev(devName)
 }
 
 func calibrationOne(chanId int) error {
