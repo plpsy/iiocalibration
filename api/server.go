@@ -494,3 +494,13 @@ func prettyJson(w http.ResponseWriter, data interface{}) {
 	enc.SetIndent("", "  ")
 	enc.Encode(data)
 }
+
+func RestartSystem(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
+	cmd := exec.Command("reboot")
+
+	go func() {
+		time.Sleep(1 * time.Second)
+		cmd.Run()
+	}()
+	w.WriteHeader(http.StatusOK)
+}

@@ -95,5 +95,6 @@ func RegisterHandler() *httprouter.Router {
 	router.GET("/regparams", api.GetRegsParams)
 	router.DELETE("/regparams", api.ClearRegsParams)
 	router.POST("/calibration", api.Calibration)
+	router.POST("/reboot", api.RestartSystem)
 	return router
 }
